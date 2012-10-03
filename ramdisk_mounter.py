@@ -1,8 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 import os
-import subprocess
+import logging
+
+import argparse
+import subprocess32 as subprocess
+
+
+logger = logging.getLogger("ramdisk_mounter")
+
 
 def check_is_same_device_as_root_fs(folder):
     return os.stat(folder).st_dev == os.stat('/').st_dev
@@ -17,75 +23,121 @@ def check_is_not_normal_harddrive(device):
     assert not '\n' in device, device
 
 
-class ramdisk(object):
-    def __init__(self, folder=None, size=1024, debug=True):
-        self.debug = debug
-
-        if not folder:
-            base_folder = os.path.dirname(__file__)
-            folder = os.path.abspath(os.path.join(base_folder, 'tmp_folder'))
-            # TODO: os.tempname?
-
-        if not os.path.exists(folder):
-            raise Exception('please pass create_folder or choose existing folder')
-
-        assert os.path.exists(folder), 'Folder must exist!'
-        self.folder = folder
-
-        assert check_is_same_device_as_root_fs(folder), ('Folder must be on / '
-                     '(ROOT) and must not be a different device (possibly '
-                     'already a RAMDISK)! Maybe try "umount {0}"?').format(self.folder)
-        self.attached = False
-
-        assert isinstance(size, int), 'Please pass integer size!'
-        assert size < 2048, 'ramdisks > 2GB not supported'
+class Ramdisk(object):
+    attached = False
+    def __init__(self, folder, size):
+        self.folder = clean_folder(folder)
 
         # 512MB --> ram://1048576
-        self.size = size * 2048 # 2048 blocksize?
+        self.size = clean_ram_disk_size(size) * 2048 # 2048 blocksize?
 
     def __enter__(self):
-        create_ramdisk_stdout = subprocess.check_output(['hdid','-nomount',
-                                          'ram://{0}'.format(self.size)])
-        self.ram_disk_device = create_ramdisk_stdout.strip().strip('\n')
-        check_is_not_normal_harddrive(self.ram_disk_device)
-        if self.debug: print 'Created RAM disk', self.ram_disk_device
-
-        if self.debug: print 'Formatting RAM disk', self.ram_disk_device
-        format_stdout = subprocess.check_output(['newfs_hfs',self.ram_disk_device])
-        assert format_stdout, format_stdout #Initialized /dev/rdisk13 as a 512 MB HFS Plus volume
-
-        old_ionode_nbr = os.stat(self.folder).st_ino
-
-        if self.debug: print 'Mounting RAM disk', self.ram_disk_device, 'as', self.folder
-        _mount_ret_code = subprocess.check_call(['mount','-t','hfs',
-                                                 self.ram_disk_device,
-                                                 self.folder])
-
-        if self.debug: print 'RAM disk',self.ram_disk_device,'mounted as',self.folder
-
-        assert old_ionode_nbr != os.stat(self.folder).st_ino
-        # TODO: probably remove this
-        assert not check_is_same_device_as_root_fs(self.folder)
-
-        self.attached = True
+        self.attach()
         return self.folder
 
     def __exit__(self, type, value, traceback):
-        if not self.attached:
-            if self.debug: print "no RAM disk to detach --> Exiting"
-            return
-
-        if self.debug: print 'Umount folder',self.folder
-        _umount_ret_code = subprocess.check_call(['umount',self.folder])
-
-        if self.debug: print 'Detaching RAM disk',self.ram_disk_device
-        detach_ramdisk_stdout = subprocess.check_output(['hdiutil','detach',
-                                            self.ram_disk_device])
-        assert detach_ramdisk_stdout, detach_ramdisk_stdout #"disk15" ejected.
+        self.detach()
 
         # from outer function
         if type:
-            if self.debug:
-                print type, value, traceback
             if issubclass(type, Exception):
                 raise
+
+    def attach(self):
+        if self.attached:
+            raise Exception("Wrong usage. Ramdisk should not be attached")
+
+        if not check_is_same_device_as_root_fs(self.folder):
+            msg = ('Folder must be on / '
+                   '(ROOT) and must not be a different device (possibly '
+                   'already a RAMDISK)! Maybe try "umount {0}"?').format(self.folder)
+            raise argparse.ArgumentTypeError(msg)
+
+        create_ramdisk_stdout = subprocess.check_output(
+            ['hdid','-nomount', 'ram://{0}'.format(self.size)])
+        ram_disk_device = create_ramdisk_stdout.strip().strip('\n')
+        check_is_not_normal_harddrive(ram_disk_device)
+        logger.info('Created RAM disk {0}'.format(ram_disk_device))
+
+        logger.info('Formatting RAM disk...')
+        format_stdout = subprocess.check_output(['newfs_hfs', ram_disk_device])
+        #Initialized /dev/rdisk13 as a 512 MB HFS Plus volume
+        assert format_stdout, format_stdout
+
+        old_ionode_nbr = os.stat(self.folder).st_ino
+
+        logger.info('Mounting RAM disk {0} as {1}'.format(ram_disk_device, self.folder))
+        subprocess.check_call(['mount','-t','hfs', ram_disk_device, self.folder])
+
+        assert old_ionode_nbr != os.stat(self.folder).st_ino
+
+        # TODO: probably remove this
+        assert not check_is_same_device_as_root_fs(self.folder)
+
+        self.ram_disk_device = ram_disk_device
+        self.attached = True
+
+    def detach(self):
+        if not self.attached:
+            assert not check_is_same_device_as_root_fs(self.folder), "Not a ramdisk."
+            logger.info("{0} might be a RAM disk. Umounting...".format(self.folder))
+
+        logger.info('Umount folder {0}'.format(self.folder))
+        # Changed behavior since 10.7.4: --> use diskutil u(n)mountDisk
+        # subprocess.check_call(['diskutil','umountDisk',self.folder])
+        # Re-Changed again 10.7.5 --> umount
+        subprocess.check_call(['umount', self.folder])
+
+        if hasattr(self, 'ram_disk_device'):
+            logger.info('Detaching RAM disk')
+            detach_ramdisk_stdout = subprocess.check_output(
+                ['hdiutil','detach', self.ram_disk_device]
+            )
+            assert detach_ramdisk_stdout, detach_ramdisk_stdout #"disk15" ejected.
+        else:
+            logger.info("I didn't create the RAM disk --> please execute "
+                   "'hdutil detach your_device_here' manually")
+            # will be done automatically??? on 10.7.5 yes.
+        self.attached = False
+
+
+def clean_folder(dir_name):
+    msg = "Directory does not exist: {0}".format(dir_name)
+    if not dir_name:
+        raise argparse.ArgumentTypeError(msg)
+    if not os.path.exists(dir_name):
+        raise argparse.ArgumentTypeError(msg)
+    if not os.path.isdir(dir_name):
+        raise argparse.ArgumentTypeError(msg)
+    return os.path.abspath(dir_name)
+
+
+def clean_ram_disk_size(size):
+    assert isinstance(size, int), 'Please pass integer size!'
+    assert size < 2048, 'ramdisks > 2GB not supported'
+    return size
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-f', '--folder',
+        type=clean_folder, help="Folder where RAM disk will be mounted",
+        required=True
+    )
+    parser.add_argument('-s','--size',
+        help="Size in MB", default=1024,
+        type=clean_ram_disk_size
+    )
+    subparsers = parser.add_subparsers()
+    parser_a = subparsers.add_parser('attach', help='Attach it')
+    parser_a.set_defaults(func_name='attach')
+    parser_d = subparsers.add_parser('detach', help='Detach it')
+    parser_d.set_defaults(func_name='detach')
+
+    parsed_args = parser.parse_args()
+
+    ramd = Ramdisk(
+        size=parsed_args.size,
+        folder=parsed_args.folder,
+    )
+    getattr(ramd, parsed_args.func_name)()
