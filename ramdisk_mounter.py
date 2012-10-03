@@ -25,11 +25,13 @@ def check_is_not_normal_harddrive(device):
 
 class Ramdisk(object):
     attached = False
-    def __init__(self, folder, size):
+    def __init__(self, folder, size=None):
         self.folder = clean_folder(folder)
 
-        # 512MB --> ram://1048576
-        self.size = clean_ram_disk_size(size) * 2048 # 2048 blocksize?
+        # TODO: pass to attach?
+        if size:
+            # 512MB --> ram://1048576
+            self.size = clean_ram_disk_size(size) * 2048 # 2048 blocksize?
 
     def __enter__(self):
         self.attach()
@@ -113,9 +115,7 @@ def clean_folder(dir_name):
 
 
 def clean_ram_disk_size(size):
-    assert isinstance(size, int), 'Please pass integer size!'
-    assert size < 2048, 'ramdisks > 2GB not supported'
-    return size
+    return int(size)
 
 
 def main():
@@ -124,20 +124,34 @@ def main():
         type=clean_folder, help="Folder where RAM disk will be mounted",
         required=True
     )
-    parser.add_argument('-s','--size',
-        help="Size in MB", default=1024,
-        type=clean_ram_disk_size
-    )
     subparsers = parser.add_subparsers()
     parser_a = subparsers.add_parser('attach', help='Attach it')
     parser_a.set_defaults(func_name='attach')
+    parser_a.add_argument('-s','--size',
+        help="Size in MB", default=1024,
+        type=clean_ram_disk_size
+    )
     parser_d = subparsers.add_parser('detach', help='Detach it')
     parser_d.set_defaults(func_name='detach')
 
     parsed_args = parser.parse_args()
 
-    ramd = Ramdisk(
-        size=parsed_args.size,
-        folder=parsed_args.folder,
-    )
-    getattr(ramd, parsed_args.func_name)()
+    if parsed_args.func_name == "attach":
+        if parsed_args.size > 2048:
+            while True:
+                is_sure = raw_input(
+                    'Your RAM disk will be huge. '
+                    'This might cause problems if the operation system '
+                    'might need the memory. Continue? (yes/no) ')
+                if is_sure.lower() == "no":
+                    import sys
+                    print "Exiting."
+                    sys.exit(1)
+                if is_sure.lower() == "yes":
+                    break
+
+        Ramdisk(folder=parsed_args.folder,
+            size=parsed_args.size
+        ).attach()
+    else:
+        Ramdisk(folder=parsed_args.folder).detach()

@@ -13,15 +13,31 @@ Provides a with definition that can be used like this:
     assert check_is_same_device_as_root_fs(fold)
 
 
-Requirements: Mac OSX 10.7.2 because "hdid", "newfs_hfs", "hdiutil" are used.
-Feel free tp port to other platforms or contribute Bugs!
+Requirements: Mac OSX 10.7.5, linux has tmpfs...
+
+Report Bugs if you notice any.
 
 
 Installation
 ------------
 
-Ramdisk-Mounter can be installed via pip from this repository. It's not on Pypi yet because it only supports Mac OS X and is still only a development version.
+Ramdisk-Mounter can be installed via pip from this repository:
 
-    1. Clone this repository && cd ramdisk-mounter
-    2. python setup.py test
-    3. python setup.py develop
+    pip install git+http://github.com/dmr/ramdisk-mounter.git#egg=ramdisk-mounter
+
+The installation provided the command "ramdisk_mounter". Basic usage:
+
+    mkdir ram_fold
+
+    # create a ramdisk with 2GB
+    ramdisk_mounter -f fold/ attach -s 2048
+
+    # <do i/o heavy commands now>
+
+    # detach RAM disk again
+    ramdisk_mounter -f fold/ detach
+
+
+You can run the tests by executing
+
+    python setup.py test

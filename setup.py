@@ -9,7 +9,7 @@ setup(
     name='Ramdisk-Mounter',
     version='0.1.1',
     url='https://github.com/dmr/ramdisk-mounter',
-    license='MIT',
+    license='LICENSE.txt', #'MIT'
     author='Daniel Rech',
     author_email='danielmrech@gmail.com',
     description='',
